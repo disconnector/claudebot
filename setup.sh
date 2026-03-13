@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # claudebot setup — bootstraps a Claude Code instance to handle the rest
-set -euo pipefail
+set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="$REPO_DIR/setup.log"
@@ -26,14 +26,17 @@ if [ ! -f "$REPO_DIR/.env" ]; then
     fi
 fi
 
-# ── Step 2: install Claude Code CLI if not present ─────────────────────────
+# ── Step 2: source nvm if present (may have been installed previously) ──────
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
+
+# ── Step 3: install Claude Code CLI if not present ─────────────────────────
 if ! command -v claude &>/dev/null; then
     info "Claude Code CLI not found — installing..."
     if ! command -v npm &>/dev/null; then
         info "Installing Node.js via nvm..."
         curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
         export NVM_DIR="$HOME/.nvm"
-        # shellcheck source=/dev/null
         [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
         nvm install --lts --default
     fi
@@ -43,63 +46,90 @@ else
     ok "Claude Code CLI already installed: $(claude --version)"
 fi
 
-# ── Step 3: hand off to Claude Code for intelligent installation ────────────
+# ── Step 4: enable systemd linger so services survive logout ───────────────
+if command -v loginctl &>/dev/null; then
+    sudo loginctl enable-linger "$(whoami)" 2>/dev/null \
+        && ok "Systemd linger enabled — services persist after logout" \
+        || warn "Could not enable linger — services may stop on logout"
+fi
+
+# ── Step 5: hand off to Claude Code for intelligent installation ────────────
 info ""
 info "Bootstrapping Claude Code installer agent..."
 info "Claude will detect your environment and complete the setup automatically."
 info ""
 
-# Load .env so we have the API key
+# Load .env so we have the API key for Claude
 set -a
 # shellcheck source=.env
 source "$REPO_DIR/.env"
 set +a
 
+# Detect server IP for the final URL
+SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+
 INSTALL_PROMPT="You are an installation assistant for claudebot, a multi-agent AI system.
 
-You are running inside the claudebot repository at: $REPO_DIR
-The target user's home directory is: $HOME
-The operating system is: $(uname -s) $(uname -r)
+Repository: $REPO_DIR
+Home directory: $HOME
+OS: $(uname -s) $(uname -r)
 
-Your job is to complete the claudebot installation by:
+Complete the installation by working through these steps in order:
 
-1. DEPENDENCIES: Install required Python packages system-wide or in a venv:
-   - pip packages: anthropic openai flask python-dotenv requests
-   - Check if python3, pip3, sqlite3 are available; install if not
+1. DEPENDENCIES
+   - Check if python3, pip3, sqlite3 are available; install missing ones via apt.
+   - Install pip packages (use 'pip3 install --user --break-system-packages' on Ubuntu 24+,
+     or plain 'pip3 install --user' on older systems):
+     anthropic openai flask python-dotenv requests
 
-2. AI-USAGE TRACKER: Create $REPO_DIR/ai-usage/usage.db (SQLite) by running:
-   cd $REPO_DIR/ai-usage && python3 tracker.py --init  (if that flag exists)
-   Or just create the DB by importing tracker and calling any init function.
+2. AI-USAGE TRACKER
+   - Read $REPO_DIR/ai-usage/tracker.py to find the init_db() function.
+   - Initialize the DB: python3 -c \"import sys; sys.path.insert(0,'$REPO_DIR/ai-usage'); import tracker; tracker.init_db()\"
+   - Verify $REPO_DIR/ai-usage/usage.db was created.
 
-3. SYSTEMD SERVICES: Install systemd user services for:
-   - claude-daemon: $REPO_DIR/claude-daemon/claude-daemon.service
-   - codex-daemon: $REPO_DIR/codex-daemon/codex-daemon.service
-   - web-chat: $REPO_DIR/web-chat/claude-web-chat.service
-   Steps: copy .service file to ~/.config/systemd/user/, systemctl --user daemon-reload,
-   systemctl --user enable <service>, systemctl --user start <service>
+3. ENV FILES — copy .env to each component:
+   cp $REPO_DIR/.env $REPO_DIR/claude-daemon/.env
+   cp $REPO_DIR/.env $REPO_DIR/codex-daemon/.env
+   cp $REPO_DIR/.env $REPO_DIR/web-chat/.env
 
-4. ENV FILES: Each daemon expects a .env in its directory. Copy $REPO_DIR/.env to:
-   - $REPO_DIR/claude-daemon/.env
-   - $REPO_DIR/codex-daemon/.env
-   - $REPO_DIR/web-chat/.env
-
-5. BIN TOOL: Install the subcontract tool:
-   cp $REPO_DIR/bin/subcontract ~/bin/subcontract
-   chmod +x ~/bin/subcontract
-   Ensure ~/bin is in PATH (add to ~/.bashrc if not)
-
-6. MEMORY DIRS: Create memory directories if they don't exist:
+4. MEMORY DIRS
    mkdir -p $REPO_DIR/claude-daemon/memory
    mkdir -p $REPO_DIR/codex-daemon/memory
 
-7. VERIFY: After installing, check each service is running:
-   systemctl --user status claude-daemon codex-daemon claude-web-chat
+5. BIN TOOL
+   mkdir -p \$HOME/bin
+   cp $REPO_DIR/bin/subcontract \$HOME/bin/subcontract
+   chmod +x \$HOME/bin/subcontract
+   Grep ~/.bashrc for '\$HOME/bin' or '~/bin' in PATH; if not found, append:
+   export PATH=\"\$HOME/bin:\$PATH\"
 
-8. REPORT: Print a summary of what was installed, what is running, and any issues.
-   Include the web chat URL: http://localhost:5003
+6. SYSTEMD SERVICES — for each of the three services:
+   Service files are in:
+     $REPO_DIR/claude-daemon/claude-daemon.service
+     $REPO_DIR/codex-daemon/codex-daemon.service
+     $REPO_DIR/web-chat/claude-web-chat.service
 
-Work through these steps systematically. If anything fails, diagnose and fix it.
-Be thorough but don't ask for confirmation — just do it."
+   The service files reference '\$HOME/claudebot/' as the repo path.
+   REPO_DIR is '$REPO_DIR'. If they differ, fix the paths.
+
+   For each service:
+   a. Copy to ~/.config/systemd/user/ (create dir if needed)
+   b. If '$REPO_DIR' != '\$HOME/claudebot', run sed in-place on the installed copy:
+      sed -i 's|\$HOME/claudebot|$REPO_DIR|g; s|%h/claudebot|$REPO_DIR|g' ~/.config/systemd/user/<service>.service
+   c. systemctl --user daemon-reload
+   d. systemctl --user enable <service>
+   e. systemctl --user start <service>
+
+7. VERIFY
+   Check each service: systemctl --user is-active claude-daemon codex-daemon claude-web-chat
+   If any are not active, check logs: journalctl --user -u <service> -n 30 --no-pager
+   Diagnose and fix any failures before reporting.
+
+8. REPORT
+   Print a summary table: service name | status | PID
+   Web chat URL: http://$SERVER_IP:5003
+
+Work through every step. Diagnose and fix failures — do not skip steps. Do not ask for confirmation."
 
 # Run Claude Code as the installer (non-interactive, uses Max subscription)
 CLAUDECODE="" claude \
@@ -107,11 +137,8 @@ CLAUDECODE="" claude \
     --no-session-persistence \
     --model sonnet \
     -p "$INSTALL_PROMPT" \
-    2>&1 | tee -a "$LOG"
+    2>&1 | tee -a "$LOG" || warn "Claude installer exited non-zero — check $LOG for details"
 
-echo ""
-# Enable linger so user services survive logout
-sudo loginctl enable-linger "$(whoami)" 2>/dev/null && ok "Systemd linger enabled — services persist after logout"
-
+info ""
 info "Setup complete. Check $LOG for full output."
-info "Web chat should be available at: http://localhost:5003"
+info "Web chat: http://$SERVER_IP:5003"

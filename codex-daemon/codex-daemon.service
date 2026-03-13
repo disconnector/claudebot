@@ -8,6 +8,8 @@ WorkingDirectory=%h/claudebot/codex-daemon
 ExecStart=/usr/bin/python3 %h/claudebot/codex-daemon/daemon.py
 Restart=on-failure
 RestartSec=5
+Environment=HOME=%h
+Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=PYTHONUNBUFFERED=1
 
 [Install]

@@ -8,6 +8,8 @@ WorkingDirectory=%h/claudebot/web-chat
 ExecStart=/usr/bin/python3 %h/claudebot/web-chat/app.py
 Restart=always
 RestartSec=5
+Environment=HOME=%h
+Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
