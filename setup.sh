@@ -35,8 +35,7 @@ if ! command -v claude &>/dev/null; then
         export NVM_DIR="$HOME/.nvm"
         # shellcheck source=/dev/null
         [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
-        nvm install --lts
-        nvm use --lts
+        nvm install --lts --default
     fi
     npm install -g @anthropic-ai/claude-code
     ok "Claude Code CLI installed: $(claude --version)"
