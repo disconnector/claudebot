@@ -64,6 +64,7 @@ set +a
 python3 "$REPO_DIR/install_agent.py" 2>&1 | tee -a "$LOG" \
     || warn "Install agent exited non-zero — check $LOG for details"
 
+SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
 info ""
 info "Setup complete. Check $LOG for full output."
 info "Web chat: http://$SERVER_IP:5003"
