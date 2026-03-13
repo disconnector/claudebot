@@ -1,0 +1,14 @@
+[Unit]
+Description=Multi-Agent Web Chat Interface
+After=network.target claude-daemon.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/claudebot/web-chat
+ExecStart=/usr/bin/python3 %h/claudebot/web-chat/app.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

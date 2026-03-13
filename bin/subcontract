@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""
+subcontract — dispatch tasks to Claude Code subprocesses (Max subscription, no API cost)
+
+Single task:
+  subcontract -t "fix the bug in this function" -f file.py
+  subcontract -t "write unit tests" -f src/foo.py src/bar.py --model sonnet
+  echo "explain this code" | subcontract -f file.py
+
+Parallel tasks (fan-out):
+  subcontract --parallel \
+    -t "check app.py for race conditions" -f app.py \
+    -- \
+    -t "check orchestrator.py for race conditions" -f orchestrator.py
+
+Options:
+  -t, --task      Task description (or pipe via stdin)
+  -f, --file      Files to include as context (per task)
+  -m, --model     haiku (default, free under Max), sonnet, opus
+  --timeout       Seconds before giving up (default: 120)
+  --parallel      Run multiple tasks separated by -- in parallel
+  -q, --quiet     Suppress progress output to stderr
+  -l, --label     Label for this worker in parallel output
+"""
+
+import argparse
+import subprocess
+import sys
+import os
+import threading
+import textwrap
+
+
+DEFAULT_MODEL = "haiku"
+DEFAULT_TIMEOUT = 120
+
+
+def build_prompt(task: str, files: list) -> str:
+    parts = []
+    for path in files:
+        try:
+            with open(path) as f:
+                content = f.read()
+            parts.append(f"### File: {path}\n```\n{content}\n```")
+        except Exception as e:
+            parts.append(f"### File: {path}\n[could not read: {e}]")
+    parts.append(f"### Task\n{task}")
+    return "\n\n".join(parts)
+
+
+def run_task(task, files, model, timeout, quiet, label=None):
+    """Run a single claude subcontract. Returns (label, output, error)."""
+    prompt = build_prompt(task, files)
+    tag = f"[{label}] " if label else ""
+
+    if not quiet:
+        file_info = f" | files: {', '.join(files)}" if files else ""
+        print(f"{tag}[subcontract] claude --model {model}{file_info}", file=sys.stderr)
+
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
+    try:
+        result = subprocess.run(
+            ["claude", "--model", model, "--dangerously-skip-permissions",
+             "--no-session-persistence", "-p", prompt],
+            capture_output=True, text=True, timeout=timeout, env=env,
+        )
+        if result.returncode != 0:
+            return label, None, f"exit {result.returncode}: {result.stderr.strip()}"
+        return label, result.stdout.strip(), None
+    except subprocess.TimeoutExpired:
+        return label, None, f"timed out after {timeout}s"
+    except Exception as e:
+        return label, None, str(e)
+
+
+def parse_parallel_args(argv):
+    """Split argv on '--' separators into groups."""
+    groups = []
+    current = []
+    for arg in argv:
+        if arg == "--":
+            if current:
+                groups.append(current)
+                current = []
+        else:
+            current.append(arg)
+    if current:
+        groups.append(current)
+    return groups
+
+
+def parse_task_group(args_list, defaults):
+    """Parse a single task group's args."""
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("-t", "--task")
+    p.add_argument("-f", "--file", nargs="+", default=[])
+    p.add_argument("-m", "--model", default=defaults.get("model", DEFAULT_MODEL))
+    p.add_argument("--timeout", type=int, default=defaults.get("timeout", DEFAULT_TIMEOUT))
+    p.add_argument("-l", "--label", default=None)
+    parsed, _ = p.parse_known_args(args_list)
+    return parsed
+
+
+def main():
+    # Check for --parallel mode by scanning raw argv
+    raw = sys.argv[1:]
+
+    if "--parallel" in raw:
+        raw.remove("--parallel")
+
+        # Extract global flags before first task group
+        p_global = argparse.ArgumentParser(add_help=False)
+        p_global.add_argument("-m", "--model", default=DEFAULT_MODEL)
+        p_global.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+        p_global.add_argument("-q", "--quiet", action="store_true")
+        globals_parsed, remaining = p_global.parse_known_args(raw)
+
+        groups = parse_parallel_args(remaining)
+        if not groups:
+            print("Error: --parallel requires at least one task group", file=sys.stderr)
+            sys.exit(1)
+
+        defaults = {"model": globals_parsed.model, "timeout": globals_parsed.timeout}
+        tasks = []
+        for i, group in enumerate(groups):
+            t = parse_task_group(group, defaults)
+            label = t.label or f"worker-{i+1}"
+            task_text = t.task
+            if not task_text:
+                print(f"Error: worker {label} has no -t task", file=sys.stderr)
+                sys.exit(1)
+            tasks.append((label, task_text, t.file, t.model, t.timeout))
+
+        if not globals_parsed.quiet:
+            print(f"[subcontract] launching {len(tasks)} parallel workers...", file=sys.stderr)
+
+        results = [None] * len(tasks)
+        threads = []
+
+        def worker(idx, label, task, files, model, timeout):
+            results[idx] = run_task(task, files, model, timeout, globals_parsed.quiet, label)
+
+        for i, (label, task, files, model, timeout) in enumerate(tasks):
+            t = threading.Thread(target=worker, args=(i, label, task, files, model, timeout))
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join()
+
+        any_error = False
+        for label, output, error in results:
+            print(f"\n{'='*60}")
+            print(f"## {label}")
+            print('='*60)
+            if error:
+                print(f"ERROR: {error}", file=sys.stderr)
+                any_error = True
+            else:
+                print(output)
+
+        sys.exit(1 if any_error else 0)
+
+    else:
+        # Single task mode
+        parser = argparse.ArgumentParser(description="Dispatch a task to Claude Code (Max subscription)")
+        parser.add_argument("-t", "--task")
+        parser.add_argument("-f", "--file", nargs="+", default=[], metavar="FILE")
+        parser.add_argument("-m", "--model", default=DEFAULT_MODEL)
+        parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+        parser.add_argument("-q", "--quiet", action="store_true")
+        parser.add_argument("-l", "--label", default=None)
+        args = parser.parse_args()
+
+        task = args.task
+        if not task:
+            if not sys.stdin.isatty():
+                task = sys.stdin.read().strip()
+            else:
+                print("Error: provide a task via -t or stdin", file=sys.stderr)
+                sys.exit(1)
+
+        label, output, error = run_task(task, args.file, args.model, args.timeout, args.quiet, args.label)
+        if error:
+            print(f"Error: {error}", file=sys.stderr)
+            sys.exit(1)
+        print(output)
+
+
+if __name__ == "__main__":
+    main()

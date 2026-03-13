@@ -1,0 +1,13 @@
+[Unit]
+Description=Claude Observer (Read-Only Chat View)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/claudebot/observer
+ExecStart=/usr/bin/python3 %h/claudebot/observer/observer.py
+Restart=on-failure
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

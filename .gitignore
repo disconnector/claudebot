@@ -1,0 +1,35 @@
+# Environment & secrets
+.env
+*.env
+*.key
+*.pem
+*.creds
+*.pass
+*.secret
+*.token
+.smtp_pass
+.github_pat
+.google_service_account.json
+.tesla_creds
+.tesla_cache.json
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.sock
+memory/
+__pycache__/
+*.pyc
+*.pyo
+.python-version
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,16 @@
+[Unit]
+Description=Claude Persistent Daemon
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/claudebot/claude-daemon
+ExecStart=/usr/bin/python3 %h/claudebot/claude-daemon/daemon.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:%h/claudebot/claude-daemon/daemon.log
+StandardError=append:%h/claudebot/claude-daemon/daemon.log
+Environment=HOME=%h
+
+[Install]
+WantedBy=default.target
