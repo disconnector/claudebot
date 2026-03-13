@@ -31,8 +31,7 @@ A multi-agent AI system for a Linux server. Two AI daemons run in parallel — *
 
 - Linux (Ubuntu 22.04+ recommended), systemd with user services
 - Python 3.10+
-- Node.js 18+ (for Claude Code CLI)
-- Anthropic API key (claude-daemon)
+- Anthropic API key (drives both the installer agent and claude-daemon)
 - OpenAI API key (codex-daemon)
 
 ## Quick Start
@@ -45,8 +44,8 @@ cd claudebot
 
 The first run of `setup.sh` will:
 1. Create `.env` from `.env.example` — **fill in your API keys**, then re-run
-2. Install Claude Code CLI (via npm) if not present
-3. Hand off to a Claude Code agent that completes the installation intelligently:
+2. Install the `anthropic` Python package if not present (needed for the installer)
+3. Hand off to a self-contained Python install agent (`install_agent.py`) that uses your `ANTHROPIC_API_KEY` directly — **no Claude Max subscription required**:
    - installs Python dependencies
    - copies `.env` to each component directory
    - installs and starts systemd user services
