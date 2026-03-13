@@ -110,5 +110,8 @@ CLAUDECODE="" claude \
     2>&1 | tee -a "$LOG"
 
 echo ""
+# Enable linger so user services survive logout
+sudo loginctl enable-linger "$(whoami)" 2>/dev/null && ok "Systemd linger enabled — services persist after logout"
+
 info "Setup complete. Check $LOG for full output."
 info "Web chat should be available at: http://localhost:5003"
